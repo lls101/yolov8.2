@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 <div align="center">
   <p>
     <a href="https://github.com/ultralytics/assets/releases/tag/v8.2.0" target="_blank">
@@ -293,3 +294,7 @@ For Ultralytics bug reports and feature requests please visit [GitHub Issues](ht
   <img src="https://github.com/ultralytics/assets/raw/main/social/logo-transparent.png" width="3%" alt="space">
   <a href="https://ultralytics.com/discord"><img src="https://github.com/ultralytics/assets/raw/main/social/logo-social-discord.png" width="3%" alt="Ultralytics Discord"></a>
 </div>
+=======
+# yolov8.2
+yolov8.2.18
+>>>>>>> 41fbd3c27306c3304e2f769a42c7f013b4937f79
