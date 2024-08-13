@@ -1,10 +1,8 @@
 # Ultralytics YOLO 🚀, AGPL-3.0 license
-from ultralytics.nn.addmodules.HATHead import HAT
-from .addmodules import *
+from .Addmodules import *
 import contextlib
 from copy import deepcopy
 from pathlib import Path
-
 import torch
 import torch.nn as nn
 
@@ -126,8 +124,36 @@ class BaseModel(nn.Module):
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
             if profile:
                 self._profile_one_layer(m, x, dt)
-            x = m(x)  # run
-            y.append(x if m.i in self.save else None)  # save output
+            if hasattr(m, 'backbone'):
+                try:
+                    if m.input_nums > 1:
+                        # input nums more than one
+                        x = m(*x)  # run
+                    else:
+                        x = m(x)
+                except AttributeError:
+                    # AttributeError: 'Conv' object has no attribute 'input_nums'
+                    x = m(x)
+                if len(x) != 5:  # 0 - 5
+                    x.insert(0, None)
+                for index, i in enumerate(x):
+                    if index in self.save:
+                        y.append(i)
+                    else:
+                        y.append(None)
+                x = x[-1]  # 最后一个输出传给下一层
+            else:
+                try:
+                    if m.input_nums > 1:
+                        # input nums more than one
+                        x = m(*x)  # run
+                    else:
+                        x = m(x)
+                except AttributeError:
+                    # AttributeError: 'Conv' object has no attribute 'input_nums'
+                    x = m(x)
+                y.append(x if m.i in self.save else None)  # save output
+
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
             if embed and m.i in embed:
@@ -232,7 +258,9 @@ class BaseModel(nn.Module):
         """
         self = super()._apply(fn)
         m = self.model[-1]  # Detect()
-        if isinstance(m, (Detect,HATHead)):  # includes all Detect subclasses like Segment, Pose, OBB, WorldDetect
+        if isinstance(m, (Detect, Detect_AFPN4, Detect_AFPN3, Detect_ASFF, Detect_FRM, Detect_dyhead, CLLAHead,
+                          Detect_DySnakeConv, Detect_dyhead3, Detect_DySnakeConv, Segment_DBB, Detect_DBB, Detect_FASFF,
+                          RFAHead, RFASegment, RepHead, Detect_Adown, Detect_SA, Segment_SA, HATHead)):  # includes all Detect subclasses like Segment, Pose, OBB, WorldDetect
             m.stride = fn(m.stride)
             m.anchors = fn(m.anchors)
             m.strides = fn(m.strides)
@@ -291,11 +319,22 @@ class DetectionModel(BaseModel):
 
         # Build strides
         m = self.model[-1]  # Detect()
-        if isinstance(m, (Detect,HATHead)):  # includes all Detect subclasses like Segment, Pose, OBB, WorldDetect
-            s = 256  # 2x min stride
+        if isinstance(m, (Detect, Detect_AFPN4, Detect_AFPN3, Detect_ASFF, Detect_FRM, Detect_dyhead, CLLAHead,
+                          Detect_DySnakeConv, Detect_dyhead3, Detect_DySnakeConv, Segment_DBB, Detect_DBB, Detect_FASFF,
+                          RFAHead, RFASegment, RepHead, Detect_Adown, Detect_SA, Segment_SA, HATHead)):  # includes all Detect subclasses like Segment, Pose, OBB, WorldDetect
+            s = 640  # 2x min stride
             m.inplace = self.inplace
-            forward = lambda x: self.forward(x)[0] if isinstance(m, (Segment, Pose, OBB)) else self.forward(x)
-            m.stride = torch.tensor([s / x.shape[-2] for x in forward(torch.zeros(1, ch, s, s))])  # forward
+            forward = lambda x: self.forward(x)[0] if isinstance(m, (Segment, Segment_DySnakeConv, Pose, Pose_DBB, Segment_DBB,
+                                                                     RFASegment, RFAPose, OBB, Pose_SA,  Segment_SA)) else self.forward(x)
+            try:
+                m.stride = torch.tensor([s / x.shape[-2] for x in forward(torch.zeros(1, ch, s, s))])  # forward on CPU
+            except RuntimeError:
+                try:
+                    self.model.to(torch.device('cuda'))
+                    m.stride = torch.tensor([s / x.shape[-2] for x in forward(
+                        torch.zeros(1, ch, s, s).to(torch.device('cuda')))])  # forward on CUDA
+                except RuntimeError as error:
+                    raise error
             self.stride = m.stride
             m.bias_init()  # only run once
         else:
@@ -852,7 +891,11 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
         LOGGER.info(f"\n{'':>3}{'from':>20}{'n':>3}{'params':>10}  {'module':<45}{'arguments':<30}")
     ch = [ch]
     layers, save, c2 = [], [], ch[-1]  # layers, savelist, ch out
+    backbone = False
+    goldyolo = False
+    two_backbone = False
     for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
+        t = m
         m = getattr(torch.nn, m[3:]) if "nn." in m else globals()[m]  # get module
         for j, a in enumerate(args):
             if isinstance(a, str):
@@ -860,52 +903,142 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                     args[j] = locals()[a] if a in locals() else ast.literal_eval(a)
 
         n = n_ = max(round(n * depth), 1) if n > 1 else n  # depth gain
-        if m in {
-            Classify,
-            Conv,
-            ConvTranspose,
-            GhostConv,
-            Bottleneck,
-            GhostBottleneck,
-            SPP,
-            SPPF,
-            DWConv,
-            Focus,
-            BottleneckCSP,
-            C1,
-            C2,
-            C2f,
-            RepNCSPELAN4,
-            ADown,
-            SPPELAN,
-            C2fAttn,
-            C3,
-            C3TR,
-            C3Ghost,
-            nn.ConvTranspose2d,
-            DWConvTranspose2d,
-            C3x,
-            RepC3,
-        }:
+        if m in (Classify, Conv, ConvTranspose, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, Focus,
+                 BottleneckCSP, C1, C2, C2f, RepNCSPELAN4, ADown, SPPELAN, C2fAttn, C3, C3TR, C3Ghost,
+                 nn.ConvTranspose2d,  DWConvTranspose2d, C3x, RepC3, C2f_ACmix, C2f_AKConv, AKConv, C2f_Context,
+                 C2f_DCNv2, DCNv2, DiverseBranchBlock, C2f_DBB, C2f_DLKA, C2f_DSConv, C2f_DWRSeg, C2f_EMA, C2f_FLA,
+                 C2f_iAFF, C2f_iRMB, C2f_MLCA, C2f_ODConv, ODConv2d, RCSOSA, CSPStage, RepConv, RFAConv, C2f_RFAConv,
+                 SAConv2d, C2f_SAConv, C2f_SCConv, C2f_SENetV1, C2f_SENetV2, VoVGSCSP, SPDConv, C2f_TripletAt, GSConv,
+                 C2f_iRMB_EMA, C2f_CGA, SimConv, nn.Conv2d, C2f_MSBlock, C2f_OREPA, C2f_DCNv4, CSPPC, CSPHet, C2f_Dual,
+                 C2f_DCNv3, Blocks, ConvNormLayer, C2f_FasterBlock, RepNCSPELAN4_high, SPPELAN, C2f_DCNv3_DLKA,
+                 RepNCSPELAN4_low, C2f_DynamicConv, DynamicConv, Down_wt, C2f_GhostModule_DynamicConv, C2f_UIB):
+
             c1, c2 = ch[f], args[0]
+
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
-                c2 = make_divisible(min(c2, max_channels) * width, 8)
+                if m is nn.Conv2d:
+                    c2 = make_divisible(c2 * width, 8)
+                else:
+                    c2 = make_divisible(min(c2, max_channels) * width, 8)
+
+            if m is Blocks:
+                if args[1][:10] in 'BottleNeck':
+                    c1, c2 = ch[f], args[0] * 4
+                    args = [c1, args[0], *args[1:]]
+                else:
+                    args = [c1, c2, *args[1:]]
+            else:
+                args = [c1, c2, *args[1:]]
             if m is C2fAttn:
                 args[1] = make_divisible(min(args[1], max_channels // 2) * width, 8)  # embed channels
                 args[2] = int(
                     max(round(min(args[2], max_channels // 2 // 32)) * width, 1) if args[2] > 1 else args[2]
                 )  # num heads
-
-            args = [c1, c2, *args[1:]]
-            if m in {BottleneckCSP, C1, C2, C2f, C2fAttn, C3, C3TR, C3Ghost, C3x, RepC3}:
+            if m in (BottleneckCSP, C1, C2, C2f, C2fAttn, C3, C3TR, C3Ghost, C3x, RepC3, C2f_ACmix, C2f_AKConv,
+                     C2f_DCNv2, C2f_DBB, C2f_DLKA, C2f_DSConv, C2f_DWRSeg, C2f_EMA, C2f_FLA, C2f_iAFF, C2f_iRMB,
+                     C2f_MLCA, C2f_ODConv, RCSOSA, CSPStage, C2f_RFAConv, C2f_SAConv, C2f_SCConv, C2f_SENetV1,
+                     C2f_SENetV2, VoVGSCSP, C2f_TripletAt, C2f_iRMB_EMA, C2f_CGA, C2f_MSBlock, C2f_OREPA, C2f_DCNv4,
+                     CSPPC, CSPHet, C2f_Dual, C2f_DCNv3, Blocks, C2f_FasterBlock, C2f_DCNv3_DLKA, C2f_DynamicConv,
+                     C2f_GhostModule_DynamicConv, C2f_UIB):
                 args.insert(2, n)  # number of repeats
                 n = 1
+
+        #---------------------------------------注意力机制------------------------
+        elif m in {BiLevelRoutingAttention, ContextGuidedBlock_Down, MultiDilatelocalAttention, LocalWindowAttention,
+                   SELayerV1, SELayerV2, HAT, EMA, MLCA, ACmix, CARAFE, DAttentionBaseline, iRMB_EMA,
+                   deformable_LKA_Attention, FocalModulation, FocusedLinearAttention, HAT, iRMB, LSKA, TripletAttention,
+                   OREPA, SCINet, Dy_Sample, CA, iAT, MultiSEAM, SEAM, deformable_LKA_Attention, ECA, GAM, CoordAtt, CBAM,
+                   SPDEMA, AirNet, ADNet, RIDNET}:
+            c2 = ch[f]
+            args = [c2, *args]
+        # ---------------------------------------注意力机制-----------------------
+        # ---------------------------------------主干----------------------------
+        elif m in {vanillanet_5, vanillanet_6, vanillanet_7, vanillanet_8, vanillanet_9, vanillanet_10,
+                   repvit_m0_6, repvit_m0_9, repvit_m1_0, repvit_m1_1, repvit_m1_5, repvit_m2_3, LSKNet,
+                   LSKNET_Tiny,
+                   LSKNET_base, SwinTransformer, MobileNetV1, MobileNetV2, MobileNetV3, shufflenet_v1_x0_5,
+                   shufflenet_v1_x1_0, shufflenet_v1_x1_5, shufflenet_v1_x2_0, shufflenetv2, revcol_small,
+                   revcol_tiny,
+                   revcol_base, revcol_xlarge, revcol_large, efficient, efficientnet_v2, FasterNet,
+                   CSWin_64_12211_tiny_224, CSWin_64_24322_small_224, CSWin_96_24322_base_224,
+                   CSWin_144_24322_large_224,
+                   convnextv2_atto, convnextv2_large, convnextv2_base, convnextv2_tiny,
+                   transnext_micro, transnext_tiny, transnext_small, transnext_base,
+                   unireplknet_a, unireplknet_f, unireplknet_p, unireplknet_n, unireplknet_t, unireplknet_s,
+                   unireplknet_b, unireplknet_l, unireplknet_xl, EfficientViT_M0, EfficientViT_M1, EfficientViT_M2,
+                   EfficientViT_M3, EfficientViT_M4, EfficientViT_M5, Ghostnetv1, Ghostnetv2,
+                   EMO_1M, EMO_2M, EMO_5M, EMO_6M, mobile_vit_small, mobile_vit_x_small, mobile_vit_xx_small,
+                   mobile_vit2_xx_small, MobileNetV4ConvSmall, MobileNetV4ConvLarge, MobileNetV4ConvMedium,
+                   MobileNetV4HybridMedium, MobileNetV4HybridLarge, pvt_v2_b0, pvt_v2_b1, pvt_v2_b2, pvt_v2_b3, pvt_v2_b4,
+                   pvt_v2_b5}:
+            m = m(*args)
+            c2 = m.width_list  # 返回通道列表
+            backbone = True
+        # ---------------------------------------主干----------------------------
+        # -----------------------------GOLD-YOLO--------------------------------
+        elif m in (Low_FAM, High_FAM, High_LAF):
+            c2 = sum(ch[x] for x in f)
+        elif m is High_IFM:
+            args[1] = make_divisible(args[1] * width, 8)
+        elif m is Low_IFM:
+            c1, c2 = ch[f], args[2]
+            if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
+                c2 = make_divisible(min(c2, max_channels) * width, 8)
+            args = [c1, *args[:-1], c2]
+        elif m is Low_LAF:
+            c1, c2 = ch[f[1]], args[0]
+            if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
+                c2 = make_divisible(min(c2, max_channels) * width, 8)
+            args = [c1, c2, *args[1:]]
+        elif m is Inject:
+            global_index = args[1]
+            c1, c2 = ch[f[1]][global_index], args[0]
+            if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
+                c2 = make_divisible(min(c2, max_channels) * width, 8)
+            args = [c1, c2, global_index]
+        elif m is RepBlock:
+            c1, c2 = ch[f], args[0]
+            if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
+                c2 = make_divisible(min(c2, max_channels) * width, 8)
+            nums_repeat = max(round(args[1] * depth), 1) if args[1] > 1 else args[1]  # depth gain
+            args = [c1, c2, nums_repeat]
+        elif m is Split:
+            c1 = ch[f]
+            goldyolo = True
+            c2 = []
+            for arg in args:
+                if arg != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
+                    c2.append(make_divisible(min(arg, max_channels) * width, 8))
+            args = [c2]
+        # -----------------------------GOLD-YOLO--------------------------------
+        # ------------------------------ASF-YOLO--------------------------------
+        elif m is Zoom_cat:
+            c2 = sum(ch[x] for x in f)
+        elif m is Add:
+            c2 = ch[f[-1]]
+        elif m is ScalSeq:
+            c1 = [ch[x] for x in f]
+            c2 = make_divisible(args[0] * width, 8)
+            args = [c1, c2]
+        elif m is attention_model:
+            args = [ch[f[-1]]]
+        # ------------------------------ASF-YOLO--------------------------------
+        elif m is Bi_FPN:
+            length = len([ch[x] for x in f])
+            args = [length]
+        elif m is SDI:
+            args = [[ch[x] for x in f]]
+        elif m is multiply:
+            c2 = ch[f[0]]
         elif m is AIFI:
             args = [ch[f], *args]
-        elif m in {HGStem, HGBlock}:
+        elif m in (HGStem, HGBlock, Light_HGBlock):
             c1, cm, c2 = ch[f], args[0], args[1]
+            cm = make_divisible(min(cm, max_channels) * width, 8)
+            c2 = make_divisible(min(c2, max_channels) * width, 8)
+            n = n_ = max(round(n * depth), 1) if n > 1 else n  # depth gain
             args = [c1, cm, c2, *args[2:]]
-            if m is HGBlock:
+            if m in (HGBlock, Light_HGBlock):
                 args.insert(4, n)  # number of repeats
                 n = 1
         elif m is ResNetLayer:
@@ -914,14 +1047,18 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
-        elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn,HATHead}:
+        elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, Detect_AFPN4,  Detect_AFPN3, Detect_ASFF,
+                   Detect_FRM, Detect_dyhead, CLLAHead, Detect_dyhead3, Detect_DySnakeConv, Segment_DySnakeConv,
+                   Pose_DBB, Segment_DBB, Detect_DBB, Detect_FASFF, RFAHead, RFASegment, RFAPose, RepHead,
+                   Detect_Adown, Pose_SA, Segment_SA, Detect_SA, HATHead}:
             args.append([ch[x] for x in f])
-            if m is Segment:
+            if m in (Segment, Segment_DySnakeConv, Segment_DBB, RFASegment, Segment_SA):
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
         elif m is RTDETRDecoder:  # special case, channels arg must be passed in index 1
             args.insert(1, [ch[x] for x in f])
         elif m is CBLinear:
-            c2 = args[0]
+            two_backbone = True
+            c2 = [make_divisible(min(x, max_channels) * width, 8) for x in args[0]]
             c1 = ch[f]
             args = [c1, c2, *args[1:]]
         elif m is CBFuse:
@@ -929,19 +1066,38 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
         else:
             c2 = ch[f]
 
-        m_ = nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
-        t = str(m)[8:-2].replace("__main__.", "")  # module type
+        if isinstance(c2, list) and not goldyolo and not two_backbone:
+            m_ = m
+            m_.backbone = True
+        else:
+            m_ = nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
+            t = str(m)[8:-2].replace('__main__.', '')  # module type
         m.np = sum(x.numel() for x in m_.parameters())  # number params
-        m_.i, m_.f, m_.type = i, f, t  # attach index, 'from' index, type
+        m_.i, m_.f, m_.type = i + 4 if backbone else i, f, t  # attach index, 'from' index, type
+
+        if m in [Inject, High_LAF]:
+            # input nums
+            m_.input_nums = len(f)
+        else:
+            m_.input_nums = 1
+
         if verbose:
-            LOGGER.info(f"{i:>3}{str(f):>20}{n_:>3}{m.np:10.0f}  {t:<45}{str(args):<30}")  # print
-        save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
+            LOGGER.info(f'{i:>3}{str(f):>20}{n_:>3}{m.np:10.0f}  {t:<45}{str(args):<30}')  # print
+
+        save.extend(
+            x % (i + 4 if backbone else i) for x in ([f] if isinstance(f, int) else f) if
+            x != -1)  # append to savelist
+
         layers.append(m_)
         if i == 0:
             ch = []
-        ch.append(c2)
+        if isinstance(c2, list) and not goldyolo and not two_backbone:
+            ch.extend(c2)
+            if len(c2) != 5:
+                ch.insert(0, 0)
+        else:
+            ch.append(c2)
     return nn.Sequential(*layers), sorted(save)
-
 
 def yaml_model_load(path):
     """Load a YOLOv8 model from a YAML file."""
@@ -1001,15 +1157,14 @@ def guess_model_task(model):
             return "classify"
         if m == "detect":
             return "detect"
-        if m == "segment":
+        if m in ('segment', 'segment_dysnakeconv', 'segment_dbb', 'rfasegment', 'segment_sa'):
             return "segment"
-        if m == "pose":
+        if m in ("pose", 'pose_dbb', 'rfapose', 'pose_sa'):
             return "pose"
         if m == "obb":
             return "obb"
         else:
-            return "detect"
-
+            return 'detect'
     # Guess from model cfg
     if isinstance(model, dict):
         with contextlib.suppress(Exception):
@@ -1025,15 +1180,17 @@ def guess_model_task(model):
                 return cfg2task(eval(x))
 
         for m in model.modules():
-            if isinstance(m, Segment):
+            if isinstance(m, (Segment, Segment_DySnakeConv, Segment_DBB, RFASegment, Segment_SA)):
                 return "segment"
             elif isinstance(m, Classify):
                 return "classify"
-            elif isinstance(m, Pose):
+            elif isinstance(m, (Pose, Pose_DBB, RFAPose, Pose_SA)):
                 return "pose"
             elif isinstance(m, OBB):
                 return "obb"
-            elif isinstance(m, (Detect, WorldDetect, HATHead)):
+            elif isinstance(m, (Detect, WorldDetect, Detect_AFPN4, Detect_AFPN3, Detect_ASFF, Detect_FRM,
+                                Detect_dyhead, CLLAHead, Detect_dyhead3, Detect_DySnakeConv, Detect_DBB, Detect_FASFF,
+                                RFAHead, RepHead, Detect_Adown, Detect_SA, HATHead)):
                 return "detect"
 
     # Guess from model filename
