@@ -49,3 +49,21 @@ source_directory = "./images"
 destination_base_directory = "./output"
 
 process_yolo_annotations(source_directory, destination_base_directory)
+
+'''
+
+
+    对于每个类别ID，现在会创建两个子文件夹：images 和 labels。
+
+    图片文件会被复制到 [class_id]/images/ 目录。
+
+    标注文件会被复制到 [class_id]/labels/ 目录。
+
+    使用 os.makedirs() 函数时添加了 exist_ok=True 参数，这样如果目录已经存在，不会引发错误。
+
+    更新了打印信息，以反映新的文件结构。
+
+使用方法保持不变。只需要将 source_directory 和 destination_base_directory 替换为你的实际路径，然后运行脚本即可。
+
+这个修改后的脚本会为每个类别创建一个单独的文件夹，并在其中分别存放图片和标注文件，符合您的要求。如果一个标注文件中包含多个类别，相应的图片和标注文件会被复制到多个类别文件夹中。
+'''
