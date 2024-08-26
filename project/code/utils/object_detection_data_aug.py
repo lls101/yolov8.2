@@ -147,7 +147,5 @@ def data_aug():
     
 if __name__ == '__main__':
     # data_aug()
-    
     # show_labels(IMAGE_PATH, LABEL_PATH)
     show_labels(AUG_IMAGE_PATH, AUG_LABEL_PATH)
-    
