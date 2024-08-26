@@ -56,9 +56,9 @@ def split_and_copy_dataset(image_dir, label_dir, output_dir, train_ratio=0.7, va
     print(f"Test dataset count: {test_count}, Missing files: {test_missing_files}")
 
 # 使用例子
-image_dir = r'D:\Downloads\wsfid\Images'
-label_dir = r'D:\Downloads\wsfid\labels'
-output_dir = r'D:\Downloads\wsfid\out'
+image_dir = 'D:\\datasets\\wgsid\\images'
+label_dir = 'D:\\datasets\\wgsid\\labels'
+output_dir = 'D:\\datasets\\wgsid\\out'
 
 split_and_copy_dataset(image_dir, label_dir, output_dir)
 
