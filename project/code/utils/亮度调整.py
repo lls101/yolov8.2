@@ -31,7 +31,7 @@ def Adaptive_light_correction(img):
 
 
 if __name__ == '__main__':
-    img = cv2.imread("111.png")
+    img = cv2.imread(r"project\code\utils\1111.jpg")
     result_img = Adaptive_light_correction(img)
     cv2.imshow("result_img",result_img)
     cv2.waitKey(0)

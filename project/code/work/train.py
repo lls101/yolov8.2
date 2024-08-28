@@ -8,7 +8,8 @@ if __name__ == '__main__':
     # data = r'D:\Workspace\datasets\wgsid\wgsid0\data.yaml'
     #data = r'D:\datasets\wgsid\out\data.yaml'
     #data = r'D:\datasets\autolabel\89\augmented_data\out\data.yaml'
-    data = r'D:\datasets\all\out\data.yaml'
+    #data = r'D:\datasets\all\out\data.yaml'
+    data=r'D:\dataset\temp\temp\data.yaml'
     model = YOLO('yolov8n.yaml')  # Load model
     model.train(
         data=data,
@@ -19,7 +20,7 @@ if __name__ == '__main__':
         optimizer='SGD',  # 优化器设置为SGDv 
         lr0=0.01,  # 初始学习率
         momentum=0.937,  # 动量``
-        patience=50,  # 提前停止训练
+        patience=10,  # 提前停止训练
         weight_decay=0.0005,  # 权重衰减
         save_period=50,  # 每10轮保存一次权重
         plots=True,  # 绘制训练过程图表
