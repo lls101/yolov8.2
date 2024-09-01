@@ -31,7 +31,7 @@ def train_and_save_results(model_name, data_path, results_file):
         optimizer='SGD',
         lr0=0.01,
         momentum=0.937,
-        patience=20,
+        patience=50,
         weight_decay=0.0005,
         save_period=50,
         plots=True,
@@ -58,7 +58,7 @@ def train_and_save_results(model_name, data_path, results_file):
         ])
 
 if __name__ == '__main__':
-    data_path = r'D:\datasets\temp\inforce\temp\data.yaml'
+    data_path = r'D:\datasets\temp\aug_test\out\data.yaml'
     results_file = r'D:\datasets\wgsid\output\model_comparison_results.csv'
 
     # 确保结果文件存在
