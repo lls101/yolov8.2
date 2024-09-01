@@ -128,7 +128,7 @@ class WIoU_Scale:
         return 1
 
 
-def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, EIoU=False, SIoU=False, WIoU=False,
+def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, EIoU=False, SIoU=False, WIoU=True,
              ShapeIoU=False, hw=1, mpdiou=False, Inner=False, Focaleriou=False, d=0.00, u=0.95, ratio=0.7,
              eps=1e-7, scale=0.0):
     """
